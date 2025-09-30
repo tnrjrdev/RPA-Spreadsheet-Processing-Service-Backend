@@ -4,7 +4,9 @@ from jose import jwt, JWTError
 from fastapi.security import OAuth2PasswordBearer
 from database import SessionLocal, engine
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List
 import models, schemas, auth
+
 
 
 models.Base.metadata.create_all(bind=engine)
@@ -13,7 +15,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],   # <=== Libera a origem do seu frontend
+    allow_origins=["http://localhost:5173"],   
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,3 +77,51 @@ def read_users_me(current_user: models.User = Depends(get_current_user)):
         "id": current_user.id,
         "username": current_user.username
     }
+
+
+@app.post("/clients/", response_model=schemas.ClientResponse)
+def create_client(client: schemas.ClientCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    db_client = db.query(models.Client).filter(models.Client.email == client.email).first()
+    if db_client:
+        raise HTTPException(status_code=400, detail="Cliente já existe")
+    new_client = models.Client(name=client.name, email=client.email)
+    db.add(new_client)
+    db.commit()
+    db.refresh(new_client)
+    return new_client
+
+
+@app.get("/clients/", response_model=List[schemas.ClientResponse])
+def read_clients(skip: int = 0, limit: int = 10, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    clients = db.query(models.Client).offset(skip).limit(limit).all()
+    return clients
+
+
+@app.get("/clients/{client_id}", response_model=schemas.ClientResponse)
+def read_client(client_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    return client
+
+
+@app.put("/clients/{client_id}", response_model=schemas.ClientResponse)
+def update_client(client_id: int, client_update: schemas.ClientCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    client.name = client_update.name
+    client.email = client_update.email
+    db.commit()
+    db.refresh(client)
+    return client
+
+
+@app.delete("/clients/{client_id}", status_code=204)
+def delete_client(client_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    db.delete(client)
+    db.commit()
+    return
