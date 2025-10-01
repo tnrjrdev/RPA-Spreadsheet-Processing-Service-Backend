@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 from fastapi.security import OAuth2PasswordBearer
@@ -7,7 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import models, schemas, auth
 
-
+import pandas as pd
+import io
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -20,7 +21,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 SECRET_KEY = "rpa_secret_key"
 ALGORITHM = "HS256"
@@ -78,7 +78,6 @@ def read_users_me(current_user: models.User = Depends(get_current_user)):
         "username": current_user.username
     }
 
-
 @app.post("/clients/", response_model=schemas.ClientResponse)
 def create_client(client: schemas.ClientCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_client = db.query(models.Client).filter(models.Client.email == client.email).first()
@@ -90,12 +89,10 @@ def create_client(client: schemas.ClientCreate, db: Session = Depends(get_db), c
     db.refresh(new_client)
     return new_client
 
-
 @app.get("/clients/", response_model=List[schemas.ClientResponse])
 def read_clients(skip: int = 0, limit: int = 10, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     clients = db.query(models.Client).offset(skip).limit(limit).all()
     return clients
-
 
 @app.get("/clients/{client_id}", response_model=schemas.ClientResponse)
 def read_client(client_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -103,7 +100,6 @@ def read_client(client_id: int, db: Session = Depends(get_db), current_user: mod
     if not client:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
     return client
-
 
 @app.put("/clients/{client_id}", response_model=schemas.ClientResponse)
 def update_client(client_id: int, client_update: schemas.ClientCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -116,7 +112,6 @@ def update_client(client_id: int, client_update: schemas.ClientCreate, db: Sessi
     db.refresh(client)
     return client
 
-
 @app.delete("/clients/{client_id}", status_code=204)
 def delete_client(client_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     client = db.query(models.Client).filter(models.Client.id == client_id).first()
@@ -125,3 +120,33 @@ def delete_client(client_id: int, db: Session = Depends(get_db), current_user: m
     db.delete(client)
     db.commit()
     return
+
+# ----------------
+# ROTAS PLANILHA:
+# ----------------
+
+dados_planilha_temp = {}
+
+@app.post("/upload/", summary="Upload de planilha CSV/XLSX")
+async def upload_planilha(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user)
+):
+    ext = file.filename.split('.')[-1]
+    content = await file.read()
+    try:
+        if ext == "csv":
+            df = pd.read_csv(io.BytesIO(content))
+        elif ext in ("xlsx", "xls"):
+            df = pd.read_excel(io.BytesIO(content))
+        else:
+            raise HTTPException(status_code=400, detail="Formato de arquivo não suportado")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Falha ao ler arquivo: {e}")
+
+    dados_planilha_temp[current_user.id] = df.to_dict(orient='records')
+    return {"msg": "Arquivo recebido", "total": len(dados_planilha_temp[current_user.id])}
+
+@app.get("/dados/", summary="Listar dados enviados pela planilha")
+def listar_dados(current_user: models.User = Depends(get_current_user)):
+    return dados_planilha_temp.get(current_user.id, [])
